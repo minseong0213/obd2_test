@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Callable, Optional
 
 from .calculations import derive_values, safe_round
-from .csv_logger import CsvLogger
+from .csv_logger import CsvLogger, format_csv_header, format_csv_row
 from .gps import GpsFix, GpsReader
 from .obd import ObdError, ObdSerial, ObdSnapshot, available_ports, format_supported_pids
 from .state import RollingState
@@ -33,6 +33,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--once", action="store_true", help="Capture one row and exit")
     parser.add_argument("--list-ports", action="store_true", help="List serial ports and exit")
     parser.add_argument("--simulate", action="store_true", help="Generate fake data without OBD hardware")
+    parser.add_argument(
+        "--print-csv-row",
+        action="store_true",
+        help="Print the exact CSV header and each saved CSV row to the terminal",
+    )
     parser.add_argument(
         "--allow-maf-fuel-estimate",
         action="store_true",
@@ -138,6 +143,10 @@ def run_logger(args, snapshot_provider: SnapshotProvider, gps_provider: GpsProvi
     last_time = time.monotonic()
 
     with CsvLogger(csv_path) as logger:
+        if args.print_csv_row:
+            print("CSV live view:")
+            print(format_csv_header())
+
         while True:
             loop_started = time.monotonic()
             now = datetime.now()
@@ -183,7 +192,10 @@ def run_logger(args, snapshot_provider: SnapshotProvider, gps_provider: GpsProvi
                 baro_kpa=baro_kpa,
             )
             logger.write(row)
-            print_status(row)
+            if args.print_csv_row:
+                print(format_csv_row(row))
+            else:
+                print_status(row)
 
             count += 1
             if args.samples and count >= args.samples:

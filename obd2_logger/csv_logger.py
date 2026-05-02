@@ -1,4 +1,5 @@
 import csv
+import io
 import os
 from typing import Dict, Iterable, TextIO
 
@@ -59,3 +60,18 @@ class CsvLogger:
     def write(self, row: Dict[str, object]) -> None:
         self._writer.writerow({name: row.get(name) for name in self.fieldnames})
         self._file.flush()
+
+
+def format_csv_header(fieldnames: Iterable[str] = CSV_COLUMNS) -> str:
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="")
+    writer.writerow(list(fieldnames))
+    return buffer.getvalue()
+
+
+def format_csv_row(row: Dict[str, object], fieldnames: Iterable[str] = CSV_COLUMNS) -> str:
+    names = list(fieldnames)
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=names, lineterminator="")
+    writer.writerow({name: row.get(name) for name in names})
+    return buffer.getvalue()

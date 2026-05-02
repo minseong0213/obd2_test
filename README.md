@@ -39,6 +39,19 @@ Run the logger:
 python -m obd2_logger --obd-port COM5 --gps-port COM7 --fuel-price 1.50
 ```
 
+Show the exact CSV rows in the terminal as they are saved:
+
+```powershell
+python -m obd2_logger --obd-port COM5 --gps-port COM7 --fuel-price 1.50 --print-csv-row
+```
+
+You can also watch the latest CSV file from a second PowerShell window:
+
+```powershell
+$file = Get-ChildItem .\logs\*.csv | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+Get-Content $file.FullName -Wait -Tail 20 -Encoding UTF8
+```
+
 If GPS is not connected:
 
 ```powershell
