@@ -9,10 +9,11 @@ today, weekly, and total fuel/distance values can continue across runs.
 
 - ELM327 v1.5 compatible Bluetooth OBD-II adapter
 - Windows laptop
-- Optional USB GPS/GNSS receiver for latitude and longitude
+- Optional USB GPS/GNSS receiver or Windows Location Services for latitude and longitude
 
-The OBD adapter does not provide GPS. If you want latitude/longitude, connect a
-USB GPS receiver or another NMEA serial GPS source.
+The OBD adapter does not provide GPS. If you want latitude/longitude, use a USB
+GPS receiver, another NMEA serial GPS source, or Windows Location Services on
+the laptop.
 
 ## Setup
 
@@ -27,17 +28,39 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+For Windows Location Services, use Python 3.9 or newer and make sure Windows
+Settings allows location access for desktop apps.
+
 List detected serial ports:
 
 ```powershell
 python -m obd2_logger --list-ports
 ```
 
+Open the GUI logger:
+
+```powershell
+python -m obd2_logger.gui
+```
+
+In the GUI, click `Refresh ports`, select the OBD COM port, choose the GPS
+source, then click `Start logging`. Use `Stop` before unplugging the OBD
+adapter so the COM port is closed cleanly.
+
 Run the logger:
 
 ```powershell
 python -m obd2_logger --obd-port COM5 --gps-port COM7 --fuel-price 1.50
 ```
+
+Use the laptop's Windows Location Services instead of a GPS COM port:
+
+```powershell
+python -m obd2_logger --obd-port COM5 --use-windows-location --fuel-price 1.50
+```
+
+Do not combine `--gps-port` and `--use-windows-location`; pick one location
+source.
 
 Show the exact CSV rows in the terminal as they are saved:
 
@@ -72,6 +95,12 @@ Run a local fake-data check without hardware:
 python -m obd2_logger --simulate --samples 5
 ```
 
+Test Windows location while simulating OBD data:
+
+```powershell
+python -m obd2_logger --simulate --use-windows-location --samples 5
+```
+
 Run unit tests:
 
 ```powershell
@@ -82,6 +111,7 @@ python -m unittest discover
 
 | Value | PID | Notes |
 | --- | --- | --- |
+| Calculated engine load | `0104` | Direct OBD value |
 | RPM | `010C` | Used for diagnostics/context |
 | Vehicle speed | `010D` | Used for distance integration by default |
 | Coolant temperature | `0105` | Direct OBD value |
@@ -105,6 +135,7 @@ The CSV contains the requested Car Scanner-style columns:
 - `주행 거리 (주간) (km)`
 - `주행 거리 (합계) (km)`
 - `순간 엔진 출력 (연료 소비 기반) (hp)`
+- `계산된 엔진 부하 (%)`
 - `스로틀 위치 (%)`
 - `엔진 냉각수 온도 (℃)`
 - `사용 연료 (L)`

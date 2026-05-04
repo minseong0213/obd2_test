@@ -6,10 +6,12 @@ requires-python = ">=3.8"
 dependencies = [
   "pyserial>=3.5",
   "pynmea2>=1.19.0",
+  "winrt-Windows.Devices.Geolocation[all]>=3.2.1; platform_system == 'Windows' and python_version >= '3.9'",
 ]
 
 [project.scripts]
 obd2-log = "obd2_logger.cli:main"
+obd2-gui = "obd2_logger.gui:main"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

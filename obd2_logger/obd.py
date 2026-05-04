@@ -20,6 +20,7 @@ class ObdError(RuntimeError):
 
 @dataclass
 class ObdSnapshot:
+    engine_load_pct: Optional[float] = None
     rpm: Optional[float] = None
     speed_kph: Optional[float] = None
     coolant_c: Optional[float] = None
@@ -112,6 +113,7 @@ def decode_fuel_rate(payload: List[int]) -> Optional[float]:
 
 
 PID_DECODERS: Dict[int, Callable[[List[int]], Optional[float]]] = {
+    0x04: decode_percent,
     0x05: decode_temp,
     0x0B: decode_pressure,
     0x0C: decode_rpm,
@@ -207,6 +209,7 @@ class ObdSerial:
             return PID_DECODERS[pid](payload)
 
         return ObdSnapshot(
+            engine_load_pct=read_value(0x04),
             rpm=read_value(0x0C),
             speed_kph=read_value(0x0D),
             coolant_c=read_value(0x05),

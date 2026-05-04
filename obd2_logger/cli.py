@@ -11,10 +11,14 @@ from .csv_logger import CsvLogger, format_csv_header, format_csv_row
 from .gps import GpsFix, GpsReader
 from .obd import ObdError, ObdSerial, ObdSnapshot, available_ports, format_supported_pids
 from .state import RollingState
+from .windows_location import WindowsLocationError, WindowsLocationReader
 
 
 SnapshotProvider = Callable[[], ObdSnapshot]
 GpsProvider = Callable[[], GpsFix]
+MessageCallback = Callable[[str], None]
+RowCallback = Callable[[dict], None]
+StopPredicate = Callable[[], bool]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -25,6 +29,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--baud", type=int, default=38400, help="ELM327 baud rate")
     parser.add_argument("--gps-port", help="Optional GPS NMEA serial port, for example COM7")
     parser.add_argument("--gps-baud", type=int, default=9600, help="GPS baud rate")
+    parser.add_argument(
+        "--use-windows-location",
+        action="store_true",
+        help="Use Windows Location Services instead of a serial GPS port",
+    )
+    parser.add_argument(
+        "--windows-location-timeout",
+        type=float,
+        default=5.0,
+        help="Windows location read timeout in seconds",
+    )
+    parser.add_argument(
+        "--windows-location-maximum-age",
+        type=float,
+        default=10.0,
+        help="Maximum age in seconds for cached Windows location fixes",
+    )
+    parser.add_argument(
+        "--windows-location-accuracy-m",
+        type=int,
+        default=50,
+        help="Requested Windows location accuracy in meters",
+    )
     parser.add_argument("--interval", type=float, default=1.0, help="Log interval in seconds")
     parser.add_argument("--out-dir", default="logs", help="CSV output directory")
     parser.add_argument("--state-file", default="state.json", help="Rolling totals JSON path")
@@ -98,20 +125,35 @@ def main(argv: Optional[list] = None) -> int:
     if args.once:
         args.samples = 1
 
-    if args.simulate:
-        return run_logger(args, simulated_snapshot_provider(), simulated_gps_provider())
+    if args.gps_port and args.use_windows_location:
+        parser.error("--gps-port and --use-windows-location cannot be used together")
 
-    if not args.obd_port:
+    if not args.simulate and not args.obd_port:
         parser.error("--obd-port is required unless --simulate or --list-ports is used")
 
     gps_reader = None
-    gps_provider = empty_gps_provider()
-    if args.gps_port:
-        gps_reader = GpsReader(args.gps_port, args.gps_baud)
-        gps_reader.start()
-        gps_provider = gps_reader.latest
+    windows_location_reader = None
+    gps_provider = simulated_gps_provider() if args.simulate else empty_gps_provider()
 
     try:
+        if args.use_windows_location:
+            print("Using Windows Location Services...")
+            windows_location_reader = WindowsLocationReader(
+                poll_interval_s=args.interval,
+                maximum_age_s=args.windows_location_maximum_age,
+                timeout_s=args.windows_location_timeout,
+                desired_accuracy_m=args.windows_location_accuracy_m,
+            )
+            windows_location_reader.start()
+            gps_provider = windows_location_reader.latest
+        elif args.gps_port:
+            gps_reader = GpsReader(args.gps_port, args.gps_baud)
+            gps_reader.start()
+            gps_provider = gps_reader.latest
+
+        if args.simulate:
+            return run_logger(args, simulated_snapshot_provider(), gps_provider)
+
         with ObdSerial(args.obd_port, baudrate=args.baud) as obd:
             print("Initializing ELM327...")
             init_responses = obd.initialize()
@@ -125,29 +167,42 @@ def main(argv: Optional[list] = None) -> int:
 
             provider = lambda: obd.read_snapshot(supported)
             return run_logger(args, provider, gps_provider)
+    except WindowsLocationError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     except KeyboardInterrupt:
         print("\nStopped.")
         return 130
     finally:
         if gps_reader is not None:
             gps_reader.stop()
+        if windows_location_reader is not None:
+            windows_location_reader.stop()
 
 
-def run_logger(args, snapshot_provider: SnapshotProvider, gps_provider: GpsProvider) -> int:
+def run_logger(
+    args,
+    snapshot_provider: SnapshotProvider,
+    gps_provider: GpsProvider,
+    should_stop: Optional[StopPredicate] = None,
+    on_message: Optional[MessageCallback] = None,
+    on_row: Optional[RowCallback] = None,
+) -> int:
     state = RollingState.load(args.state_file)
     csv_path = make_csv_path(args.out_dir)
-    print(f"Writing CSV: {csv_path}")
-    print(f"State file: {os.path.abspath(args.state_file)}")
+    emit(f"Writing CSV: {csv_path}", on_message)
+    emit(f"State file: {os.path.abspath(args.state_file)}", on_message)
 
     count = 0
     last_time = time.monotonic()
+    stop_requested = should_stop or (lambda: False)
 
     with CsvLogger(csv_path) as logger:
         if args.print_csv_row:
-            print("CSV live view:")
-            print(format_csv_header())
+            emit("CSV live view:", on_message)
+            emit(format_csv_header(), on_message)
 
-        while True:
+        while not stop_requested():
             loop_started = time.monotonic()
             now = datetime.now()
             elapsed_s = max(loop_started - last_time, 0.0)
@@ -192,17 +247,21 @@ def run_logger(args, snapshot_provider: SnapshotProvider, gps_provider: GpsProvi
                 baro_kpa=baro_kpa,
             )
             logger.write(row)
+            if on_row is not None:
+                on_row(row)
             if args.print_csv_row:
-                print(format_csv_row(row))
+                emit(format_csv_row(row), on_message)
             else:
-                print_status(row)
+                emit(format_status(row), on_message)
 
             count += 1
             if args.samples and count >= args.samples:
                 break
 
             sleep_s = max(args.interval - (time.monotonic() - loop_started), 0.0)
-            time.sleep(sleep_s)
+            sleep_until = time.monotonic() + sleep_s
+            while not stop_requested() and time.monotonic() < sleep_until:
+                time.sleep(min(0.1, max(sleep_until - time.monotonic(), 0.0)))
 
     return 0
 
@@ -234,6 +293,7 @@ def build_row(
         "주행 거리 (주간) (km)": safe_round(state.week.distance_km, 4),
         "주행 거리 (합계) (km)": safe_round(state.total.distance_km, 4),
         "순간 엔진 출력 (연료 소비 기반) (hp)": safe_round(derived.fuel_power_hp, 2),
+        "계산된 엔진 부하 (%)": safe_round(snapshot.engine_load_pct, 1),
         "스로틀 위치 (%)": safe_round(snapshot.throttle_pct, 1),
         "엔진 냉각수 온도 (℃)": safe_round(snapshot.coolant_c, 1),
         "사용 연료 (L)": safe_round(state.session.fuel_l, 5),
@@ -258,18 +318,27 @@ def build_row(
 
 
 def print_status(row: dict) -> None:
-    print(
-        " | ".join(
-            [
-                row["timestamp"],
-                f"speed={row['obd_speed_kph']}km/h",
-                f"fuel={row['계산된 순간 연료 소비율 (L/h)']}L/h",
-                f"avg_today={row['평균 연비 (오늘) (L/100km)']}L/100km",
-                f"lat={row['Latitude']}",
-                f"lon={row['Longitude']}",
-            ]
-        )
+    print(format_status(row))
+
+
+def format_status(row: dict) -> str:
+    return " | ".join(
+        [
+            row["timestamp"],
+            f"speed={row['obd_speed_kph']}km/h",
+            f"fuel={row['계산된 순간 연료 소비율 (L/h)']}L/h",
+            f"avg_today={row['평균 연비 (오늘) (L/100km)']}L/100km",
+            f"lat={row['Latitude']}",
+            f"lon={row['Longitude']}",
+        ]
     )
+
+
+def emit(message: str, callback: Optional[MessageCallback] = None) -> None:
+    if callback is None:
+        print(message)
+    else:
+        callback(message)
 
 
 def make_csv_path(out_dir: str) -> str:
@@ -313,6 +382,7 @@ def simulated_snapshot_provider() -> SnapshotProvider:
         map_kpa = 120.0 + max(wave, 0.0) * 60.0
         fuel_rate = 4.8 + max(wave, 0.0) * 3.0
         return ObdSnapshot(
+            engine_load_pct=36.0 + max(wave, 0.0) * 28.0,
             rpm=rpm,
             speed_kph=speed,
             coolant_c=86.0,

@@ -4,8 +4,9 @@ import unittest
 from datetime import datetime
 
 from obd2_logger.calculations import derive_values
-from obd2_logger.obd import decode_supported_pids, parse_obd_payload
+from obd2_logger.obd import decode_percent, decode_supported_pids, parse_obd_payload
 from obd2_logger.state import RollingState
+from obd2_logger.windows_location import gps_fix_from_geoposition
 
 
 class ObdParsingTests(unittest.TestCase):
@@ -14,10 +15,14 @@ class ObdParsingTests(unittest.TestCase):
         self.assertEqual(payload, [0x1A, 0xF8])
 
     def test_decode_supported_pids(self):
-        supported = decode_supported_pids(0x00, [0x08, 0x18, 0x00, 0x00])
+        supported = decode_supported_pids(0x00, [0x18, 0x18, 0x00, 0x00])
+        self.assertIn(0x04, supported)
         self.assertIn(0x05, supported)
         self.assertIn(0x0C, supported)
         self.assertIn(0x0D, supported)
+
+    def test_decode_percent(self):
+        self.assertAlmostEqual(decode_percent([128]), 50.19607843137255)
 
 
 class CalculationTests(unittest.TestCase):
@@ -51,6 +56,26 @@ class StateTests(unittest.TestCase):
             self.assertAlmostEqual(loaded.today.distance_km, 10.0)
             self.assertAlmostEqual(loaded.today.fuel_l, 0.7)
             self.assertAlmostEqual(loaded.total.distance_km, 10.0)
+
+
+class WindowsLocationTests(unittest.TestCase):
+    def test_converts_windows_geoposition_to_gps_fix(self):
+        class Coordinate:
+            latitude = 37.5665
+            longitude = 126.978
+            speed = 2.5
+            timestamp = datetime(2026, 5, 2, 12, 0)
+
+        class Position:
+            coordinate = Coordinate()
+
+        fix = gps_fix_from_geoposition(Position())
+
+        self.assertTrue(fix.valid)
+        self.assertAlmostEqual(fix.latitude, 37.5665)
+        self.assertAlmostEqual(fix.longitude, 126.978)
+        self.assertAlmostEqual(fix.speed_kph, 9.0)
+        self.assertEqual(fix.timestamp_utc, "2026-05-02T12:00:00")
 
 
 if __name__ == "__main__":
